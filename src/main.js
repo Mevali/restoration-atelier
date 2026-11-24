@@ -6,6 +6,10 @@ import {
   ITEMS_CATALOG,
   UPGRADE_DEFS,
   DAILY_REWARDS,
+  MUSEUM_WINGS,
+  GUILD_LEAGUES,
+  GUILD_RIVALS,
+  createAuctionSession,
   getDailyRewardAmount,
   getUpgradeCost,
   getBrushRadius,
@@ -27,6 +31,9 @@ const DEFAULT_STATE = {
   activeLot: null,
   savedOrderProgress: null,
   rackTutorialDone: false,
+  freeTurboGiftUsed: false,
+  claimedWings: {},
+  claimedLeagues: {},
   upgrades: {
     brushSize: 1,
     brushPower: 1,
@@ -79,8 +86,12 @@ class GameApp {
     this.currentPendingSale = null;
 
     this.turboRemainingSec = 0;
+    this.turboCooldownSec = 0;
     this.chestCooldownSec = 0;
+    this.patronCooldownSec = 0;
     this.dailyPromptedThisSession = false;
+    this.auctionSession = null;
+    this.lastKnownRank = null;
 
     this.displayedCoins = 0;
     this.coinAnimFrame = 0;
@@ -120,17 +131,46 @@ class GameApp {
     await this.platform.init();
 
     const loaded = await this.platform.loadState(DEFAULT_STATE);
+    const isLocalQa =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
+    const qaParams = isLocalQa ? new URLSearchParams(window.location.search || '') : null;
+    const qaReset = Boolean(qaParams?.get('reset'));
+
+    const baseLoaded = qaReset ? {} : loaded;
     this.state = {
       ...DEFAULT_STATE,
-      ...loaded,
-      upgrades: { ...DEFAULT_STATE.upgrades, ...(loaded.upgrades || {}) },
-      collectionRecords: { ...(loaded.collectionRecords || {}) },
-      daily: { ...DEFAULT_STATE.daily, ...(loaded.daily || {}) }
+      ...baseLoaded,
+      claimedWings: { ...(baseLoaded.claimedWings || {}) },
+      claimedLeagues: { ...(baseLoaded.claimedLeagues || {}) },
+      upgrades: { ...DEFAULT_STATE.upgrades, ...(baseLoaded.upgrades || {}) },
+      collectionRecords: { ...(baseLoaded.collectionRecords || {}) },
+      daily: { ...DEFAULT_STATE.daily, ...(baseLoaded.daily || {}) }
     };
+
+    if (qaParams?.get('qa_leagues')) {
+      this.state.coins = 1450;
+      this.state.totalEarned = 3150;
+      this.state.orderIndex = 6;
+      this.state.completedCount = 6;
+      for (let i = 0; i < 6; i++) {
+        this.state.collectionRecords[ITEMS_CATALOG[i].id] = 300 + i * 120;
+      }
+    } else if (qaParams?.get('qa_auction')) {
+      this.state.coins = 620;
+      this.state.totalEarned = 980;
+      this.state.orderIndex = 4;
+      this.state.completedCount = 4;
+      for (let i = 0; i < 4; i++) {
+        this.state.collectionRecords[ITEMS_CATALOG[i].id] = 160 + i * 90;
+      }
+    }
+
     this.displayedCoins = this.state.coins;
+    this.lastKnownRank = this.computeCurrentRank().rank;
 
     delete this.state.lang;
-    const chosenLang = this.platform.detectInitialLang();
+    const chosenLang = (isLocalQa && qaParams?.get('lang')) || this.platform.detectInitialLang();
     this.i18n.setLang(normalizeLang(chosenLang));
 
     this.audio.setUserMuted(Boolean(this.state.muted));
@@ -148,6 +188,7 @@ class GameApp {
         this.refreshOperationBar(this.currentStepIndex);
       },
       onNeedToolPick: (reqKey, wrongKey) => this.handleNeedToolPick(reqKey, wrongKey),
+      onMasterGrip: () => this.showToast(this.i18n.t('masterGripToast')),
       onReadyForTest: () => this.handleReadyForTest(),
       onMakerMarkReveal: () => this.handleMakerMarkReveal(),
       onToolStateChange: () => {
@@ -174,6 +215,21 @@ class GameApp {
     this.refreshAllUi();
     this.startTimers();
 
+    if (qaParams?.get('qa_auction') && this.currentOrder) {
+      this.currentOrder.markRevealed = true;
+      this.currentOrder.markMult = 1.65;
+      const snap = `assets/items/${this.currentOrder.item.basePartId}_clean.webp`;
+      const dirtySnap = `assets/items/${this.currentOrder.item.basePartId}_muddy.webp`;
+      this.handleItemComplete({ beforeDataUrl: dirtySnap, afterDataUrl: snap });
+    } else if (qaParams?.get('qa_leagues')) {
+      this.openLeaderboardModalDirect();
+    } else if (this.state.daily.lastClaimDate && this.canClaimDailyToday() && !this.dailyPromptedThisSession) {
+      this.dailyPromptedThisSession = true;
+      setTimeout(() => {
+        if (!this.hasOpenModal()) this.openDailyModal();
+      }, 420);
+    }
+
     requestAnimationFrame(() => {
       this.platform.signalLoadingReady();
       this.platform.showStickyBanner();
@@ -187,6 +243,10 @@ class GameApp {
   mountStaticIcons() {
     $('coins-icon-slot').innerHTML = iconSvg('coin');
     $('est-coin-slot').innerHTML = iconSvg('coin');
+    if ($('rank-icon-slot')) $('rank-icon-slot').innerHTML = iconSvg('trophy');
+    if ($('icon-gavel-slot')) $('icon-gavel-slot').innerHTML = iconSvg('gavel');
+    if ($('sell-gavel-slot')) $('sell-gavel-slot').innerHTML = iconSvg('gavel');
+    if ($('daily-x2-play-slot')) $('daily-x2-play-slot').innerHTML = iconSvg('playAd');
     $('icon-daily-slot').innerHTML = iconSvg('calendar');
     $('icon-collection-slot').innerHTML = iconSvg('museum');
     $('icon-hint-slot').innerHTML = iconSvg('loupe');
@@ -266,6 +326,10 @@ class GameApp {
         this.platform.setGameplayActive(!this.hasOpenModal());
       }
     });
+
+    window.addEventListener('resize', () => {
+      if (this.currentOrder) this.refreshAllUi();
+    });
   }
 
   hasOpenModal() {
@@ -273,7 +337,8 @@ class GameApp {
       !$('modal-complete').classList.contains('hidden') ||
       !$('modal-collection').classList.contains('hidden') ||
       !$('modal-daily').classList.contains('hidden') ||
-      !$('modal-market').classList.contains('hidden')
+      !$('modal-market').classList.contains('hidden') ||
+      !$('modal-guide').classList.contains('hidden')
     );
   }
 
@@ -294,6 +359,21 @@ class GameApp {
       this.applyTranslations();
       this.refreshAllUi();
     });
+
+    $('btn-help')?.addEventListener('click', () => {
+      this.audio.unlock();
+      this.audio.playClick();
+      this.setDrawerOpen(false);
+      this.openModal('modal-guide');
+    });
+    $('btn-close-guide')?.addEventListener('click', () => this.closeModal('modal-guide'));
+    $('btn-guide-ok')?.addEventListener('click', () => {
+      this.audio.unlock();
+      this.audio.playClick();
+      this.closeModal('modal-guide');
+    });
+
+    $('btn-rank-hud')?.addEventListener('click', () => this.openLeaderboardModalDirect());
 
     $('btn-hint-spot').addEventListener('click', () => {
       this.audio.unlock();
@@ -321,6 +401,8 @@ class GameApp {
     }
 
     // Complete & Market modals
+    $('btn-raise-bid')?.addEventListener('click', () => this.raiseAuctionBid());
+    $('btn-wing-claim-inline')?.addEventListener('click', () => this.claimReadyWingInline());
     $('btn-sell-normal').addEventListener('click', () => this.sellItem(1));
     $('btn-sell-x2').addEventListener('click', () => this.sellItemX2Ad());
     $('btn-test-item').addEventListener('click', () => this.triggerFunctionalTest(true));
@@ -335,17 +417,19 @@ class GameApp {
     });
     this.bindBaCompareSlider();
 
-    // Archive modal
+    // Archive & Guild Leagues modal
     $('btn-collection').addEventListener('click', () => this.openCollectionModal());
     $('btn-close-collection').addEventListener('click', () => this.closeModal('modal-collection'));
     $('tab-museum').addEventListener('click', () => this.switchCollectionTab('museum'));
     $('tab-leaderboard').addEventListener('click', () => this.switchCollectionTab('leaderboard'));
+    $('btn-claim-league')?.addEventListener('click', () => this.claimPendingLeagueReward());
     $('btn-lb-auth').addEventListener('click', () => this.handleLeaderboardAuth());
 
     // Daily modal
     $('btn-daily').addEventListener('click', () => this.openDailyModal());
     $('btn-close-daily').addEventListener('click', () => this.closeModal('modal-daily'));
-    $('btn-claim-daily').addEventListener('click', () => this.claimDailyReward());
+    $('btn-claim-daily').addEventListener('click', () => this.claimDailyReward(1));
+    $('btn-claim-daily-x2')?.addEventListener('click', () => this.claimDailyRewardX2());
 
     // Desktop hotkeys 1-9 for selecting tools on the rack
     window.addEventListener('keydown', (e) => {
@@ -504,8 +588,16 @@ class GameApp {
           this.syncBrushTool();
         }
       }
+      if (this.turboCooldownSec > 0) {
+        this.turboCooldownSec -= 1;
+        dirty = true;
+      }
       if (this.chestCooldownSec > 0) {
         this.chestCooldownSec -= 1;
+        dirty = true;
+      }
+      if (this.patronCooldownSec > 0) {
+        this.patronCooldownSec -= 1;
         dirty = true;
       }
       if (dirty) {
@@ -686,10 +778,14 @@ class GameApp {
 
   handleItemComplete({ beforeDataUrl, afterDataUrl }) {
     $('test-item-wrap').classList.add('hidden');
-    const payout = computeOrderPayout(this.currentOrder, this.state.upgrades.appraisal);
+    const baseAppraisal = computeOrderPayout(this.currentOrder, this.state.upgrades.appraisal);
+    this.auctionSession = createAuctionSession(baseAppraisal, this.currentOrder.orderNumber);
+    const topBid = this.getLeadingAuctionBid(baseAppraisal);
+
     this.currentPendingSale = {
       order: this.currentOrder,
-      payout,
+      baseAppraisal,
+      payout: topBid,
       beforeDataUrl,
       afterDataUrl
     };
@@ -720,10 +816,8 @@ class GameApp {
       }
     }
 
-    $('reward-value').textContent = String(payout);
-    $('sell-normal-amount').textContent = String(payout);
-    $('sell-x2-amount').textContent = String(payout * 2);
-    $('btn-sell-x2').classList.toggle('hidden', !this.platform.isRewardedSupported());
+    this.renderAuctionBox();
+    this.renderCompleteWingStrip(this.currentOrder.item.id);
 
     const nextIdx = this.currentOrder.isReplay ? this.state.orderIndex : this.state.orderIndex + 1;
     const nextSpec = getOrderSpec(nextIdx);
@@ -744,6 +838,165 @@ class GameApp {
     this.setDrawerOpen(false);
     this.audio.playPaperRustle();
     this.openModal('modal-complete');
+  }
+
+  getLeadingAuctionBid(fallback = 70) {
+    if (!this.auctionSession?.bidders?.length) return fallback;
+    return Math.max(...this.auctionSession.bidders.map((b) => b.bid));
+  }
+
+  renderAuctionBox() {
+    if (!this.auctionSession || !this.currentPendingSale) return;
+    const { round, maxRounds, bidders } = this.auctionSession;
+    const topBid = this.getLeadingAuctionBid(this.currentPendingSale.baseAppraisal);
+    this.currentPendingSale.payout = topBid;
+
+    $('auction-title').textContent = this.i18n.t('auctionTitle');
+    const raiseBtn = $('btn-raise-bid');
+    if (raiseBtn) {
+      if (round >= maxRounds) {
+        raiseBtn.disabled = true;
+        $('raise-bid-label').textContent = this.i18n.t('auctionSoldTop');
+      } else {
+        raiseBtn.disabled = false;
+        $('raise-bid-label').textContent = this.i18n.t('auctionRaiseBtn', {
+          cur: round + 1,
+          max: maxRounds
+        });
+      }
+    }
+
+    const wrap = $('auction-bidders');
+    if (wrap) {
+      wrap.innerHTML = '';
+      for (const b of bidders) {
+        const card = document.createElement('div');
+        card.className = `bidder-card${b.bid === topBid ? ' leading' : ''}`;
+        const nm = document.createElement('span');
+        nm.className = 'bidder-name';
+        nm.textContent = this.i18n.t(`bidder_${b.id}`);
+        const amt = document.createElement('strong');
+        amt.className = 'bidder-amount';
+        amt.textContent = formatCoinAmount(b.bid);
+        card.append(nm, amt);
+        wrap.appendChild(card);
+      }
+    }
+
+    $('reward-value').textContent = formatCoinAmount(topBid);
+    $('sell-normal-label').textContent = this.i18n.t('sellHammerBtn');
+    $('sell-normal-amount').textContent = `+${formatCoinAmount(topBid)}`;
+
+    const sellX2Btn = $('btn-sell-x2');
+    const isNoFill = Boolean(this.platform.cgNoFillDetected);
+    if (!this.platform.isRewardedSupported()) {
+      sellX2Btn.classList.add('hidden');
+    } else if (isNoFill) {
+      sellX2Btn.classList.toggle('hidden', this.patronCooldownSec > 0);
+      $('sell-x2-label').textContent = this.i18n.t('sellPatronGrant');
+      $('sell-x2-tag')?.classList.add('hidden');
+      const patronAmt = Math.round((topBid * 1.35) / 5) * 5;
+      $('sell-x2-amount').textContent = `+${formatCoinAmount(patronAmt)}`;
+    } else {
+      sellX2Btn.classList.remove('hidden');
+      $('sell-x2-label').textContent = this.i18n.t('sellVipX2');
+      $('sell-x2-tag')?.classList.remove('hidden');
+      $('sell-x2-amount').textContent = `+${formatCoinAmount(topBid * 2)}`;
+    }
+  }
+
+  raiseAuctionBid() {
+    if (!this.auctionSession || !this.currentPendingSale) return;
+    if (this.auctionSession.round >= this.auctionSession.maxRounds) return;
+    this.audio.unlock();
+    this.audio.playCoins();
+
+    this.auctionSession.round += 1;
+    const r = this.auctionSession.round;
+    const base = this.currentPendingSale.baseAppraisal;
+    const roundTo5 = (v) => Math.max(10, Math.round(v / 5) * 5);
+
+    this.auctionSession.bidders = this.auctionSession.bidders.map((b) => ({
+      ...b,
+      bid: roundTo5(base * (b.mults[r] || b.mults[b.mults.length - 1]))
+    }));
+    this.renderAuctionBox();
+  }
+
+  getProjectedWingState(pendingItemId = null) {
+    const unlockedSet = new Set(Object.keys(this.state.collectionRecords));
+    if (pendingItemId) unlockedSet.add(pendingItemId);
+
+    for (const wing of MUSEUM_WINGS) {
+      if (this.state.claimedWings[wing.id]) continue;
+      const done = wing.itemIds.filter((id) => unlockedSet.has(id)).length;
+      return { wing, done, total: wing.itemIds.length, ready: done >= wing.itemIds.length };
+    }
+    return null;
+  }
+
+  renderCompleteWingStrip(pendingItemId = null) {
+    const strip = $('complete-wing-strip');
+    if (!strip) return;
+    const info = this.getProjectedWingState(pendingItemId);
+    const claimBtn = $('btn-wing-claim-inline');
+    if (!info) {
+      $('wing-strip-title').textContent = this.i18n.t('wingDoneAll');
+      $('wing-strip-fill').style.width = '100%';
+      claimBtn?.classList.add('hidden');
+      return;
+    }
+
+    const { wing, done, total, ready } = info;
+    $('wing-strip-title').textContent = this.i18n.t('wingStripProgress', {
+      name: this.i18n.t(wing.id),
+      done,
+      total,
+      reward: formatCoinAmount(wing.reward)
+    });
+    $('wing-strip-fill').style.width = `${Math.min(100, Math.round((done / total) * 100))}%`;
+
+    if (claimBtn) {
+      if (ready) {
+        claimBtn.dataset.wingId = wing.id;
+        claimBtn.dataset.pendingId = pendingItemId || '';
+        claimBtn.textContent = this.i18n.t('wingClaimBtn', { reward: formatCoinAmount(wing.reward) });
+        claimBtn.classList.remove('hidden');
+      } else {
+        claimBtn.classList.add('hidden');
+      }
+    }
+  }
+
+  claimReadyWingInline() {
+    const btn = $('btn-wing-claim-inline');
+    const wingId = btn?.dataset?.wingId;
+    const pendingId = btn?.dataset?.pendingId;
+    if (!wingId || this.state.claimedWings[wingId]) return;
+    const wing = MUSEUM_WINGS.find((w) => w.id === wingId);
+    if (!wing) return;
+
+    if (pendingId && !this.state.collectionRecords[pendingId]) {
+      this.state.collectionRecords[pendingId] = this.currentPendingSale?.payout || 100;
+    }
+    this.awardWingReward(wing, btn);
+    this.renderCompleteWingStrip(pendingId || null);
+  }
+
+  awardWingReward(wing, sourceEl = null) {
+    if (!wing || this.state.claimedWings[wing.id]) return;
+    this.audio.unlock();
+    this.state.claimedWings[wing.id] = true;
+    this.state.coins += wing.reward;
+    this.state.totalEarned += wing.reward;
+    this.spawnFlyingCoins(sourceEl || $('btn-collection'), 9);
+    this.audio.playCoins();
+    this.pulseCoins();
+    this.animateCoinsTo(this.state.coins);
+    this.checkRankOvertakeToast();
+    this.save(true);
+    this.refreshAllUi();
+    this.showToast(`${this.i18n.t(wing.id)} · +${formatCoinAmount(wing.reward)}`);
   }
 
   handleNeedToolPick(reqKey, wrongKey = null) {
@@ -859,13 +1112,23 @@ class GameApp {
     this.audio.unlock();
     this.audio.playClick();
 
+    if (this.platform.cgNoFillDetected) {
+      if (this.patronCooldownSec > 0) return;
+      this.patronCooldownSec = 150;
+      await this.sellItem(1.35, true);
+      return;
+    }
+
     const btn = $('btn-sell-x2');
     btn.disabled = true;
-    const { rewarded } = await this.platform.showRewarded('x2_sell');
+    const { rewarded, noFill } = await this.platform.showRewarded('x2_sell');
     btn.disabled = false;
 
     if (rewarded) {
       await this.sellItem(2, true);
+    } else if (noFill) {
+      this.patronCooldownSec = 150;
+      await this.sellItem(1.35, true);
     } else {
       this.showToast(this.i18n.t('toastAdFail'));
     }
@@ -874,7 +1137,7 @@ class GameApp {
   async sellItem(multiplier = 1, skipInterstitial = false) {
     if (!this.currentPendingSale) return;
     const { order, payout } = this.currentPendingSale;
-    const finalCoins = payout * multiplier;
+    const finalCoins = Math.round(payout * multiplier);
     this.currentPendingSale = null;
 
     const sellBtn = $(multiplier > 1 ? 'btn-sell-x2' : 'btn-sell-normal');
@@ -900,6 +1163,9 @@ class GameApp {
     this.animateCoinsTo(this.state.coins);
     this.closeModal('modal-complete');
 
+    const promotedLeague = this.getPendingLeaguePromotion();
+    this.checkRankOvertakeToast();
+
     this.save(true);
     const durationSec = Math.max(1, Math.round((performance.now() - this.orderStartedAtMs) / 1000));
     this.platform.notifyLevelCompleted(order.orderNumber);
@@ -910,22 +1176,38 @@ class GameApp {
       auction_x2: multiplier > 1,
       duration_sec: durationSec
     });
-    this.platform.submitLeaderboardScore(this.state.totalEarned);
+    this.platform.submitLeaderboardScore(this.getReputationScore());
 
     if (!skipInterstitial) {
       await this.platform.showInterstitialIfReady();
     }
 
-    // Fast zero-modal transition from tutorial Order #1 directly onto teased Order #2
+    // After Order #1: load Order #2 directly and auto-open Day 1 Calendar gift
     if (this.state.completedCount === 1) {
       await this.loadCurrentOrder();
       this.refreshAllUi();
+      if (!this.dailyPromptedThisSession && this.canClaimDailyToday()) {
+        this.dailyPromptedThisSession = true;
+        setTimeout(() => {
+          if (!this.hasOpenModal()) this.openDailyModal();
+        }, 380);
+      }
       return;
     }
 
-    if (this.state.completedCount === 3 && !this.dailyPromptedThisSession && this.canClaimDailyToday()) {
-      this.dailyPromptedThisSession = true;
-      this.pendingDailyAfterMarket = true;
+    if (promotedLeague) {
+      await this.loadCurrentOrder();
+      this.refreshAllUi();
+      this.showToast(
+        this.i18n.t('leaguePromoToast', {
+          name: this.i18n.t(`league_${promotedLeague.id}`),
+          reward: formatCoinAmount(promotedLeague.reward)
+        })
+      );
+      setTimeout(() => {
+        if (!this.hasOpenModal()) this.openLeaderboardModalDirect();
+      }, 340);
+      return;
     }
 
     await this.openMarketModal();
@@ -978,14 +1260,40 @@ class GameApp {
     );
   }
 
+  isFreeTurboGiftAvailable() {
+    return !this.state.freeTurboGiftUsed && (this.state.orderIndex >= 1 || (this.currentOrder?.orderNumber || 1) >= 2);
+  }
+
   async activateTurboAd() {
-    if (this.turboRemainingSec > 0) return;
+    if (this.turboRemainingSec > 0 || this.turboCooldownSec > 0) return;
     this.audio.unlock();
     this.audio.playClick();
 
-    const { rewarded } = await this.platform.showRewarded('turbo_boost');
-    if (rewarded) {
+    if (this.isFreeTurboGiftAvailable()) {
+      this.state.freeTurboGiftUsed = true;
       this.turboRemainingSec = 45;
+      this.syncBrushTool();
+      this.save(true);
+      this.refreshBoostersUi();
+      this.audio.playUpgrade();
+      this.showToast(this.i18n.t('toastTurboOn'));
+      return;
+    }
+
+    if (this.platform.cgNoFillDetected) {
+      this.turboRemainingSec = 45;
+      this.turboCooldownSec = 120;
+      this.syncBrushTool();
+      this.refreshBoostersUi();
+      this.audio.playUpgrade();
+      this.showToast(this.i18n.t('toastTurboOn'));
+      return;
+    }
+
+    const { rewarded, noFill } = await this.platform.showRewarded('turbo_boost');
+    if (rewarded || noFill) {
+      this.turboRemainingSec = 45;
+      if (noFill) this.turboCooldownSec = 120;
       this.syncBrushTool();
       this.refreshBoostersUi();
       this.audio.playUpgrade();
@@ -1000,22 +1308,36 @@ class GameApp {
     this.audio.unlock();
     this.audio.playClick();
 
-    const { rewarded } = await this.platform.showRewarded('scavenger_chest');
+    const fullAmount = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
+    if (this.platform.cgNoFillDetected) {
+      const amount = Math.max(40, Math.round((fullAmount * 0.55) / 5) * 5);
+      this.grantChestCoins(amount, 120, $('btn-chest'));
+      return;
+    }
+
+    const { rewarded, noFill } = await this.platform.showRewarded('scavenger_chest');
     if (rewarded) {
-      const amount = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
-      this.spawnFlyingCoins($('btn-chest'), 8);
-      this.state.coins += amount;
-      this.state.totalEarned += amount;
-      this.chestCooldownSec = 90;
-      this.audio.playCoins();
-      this.pulseCoins();
-      this.animateCoinsTo(this.state.coins);
-      this.save(true);
-      this.refreshAllUi();
-      this.showToast(this.i18n.t('toastChest', { amount }));
+      this.grantChestCoins(fullAmount, 90, $('btn-chest'));
+    } else if (noFill) {
+      const amount = Math.max(40, Math.round((fullAmount * 0.55) / 5) * 5);
+      this.grantChestCoins(amount, 120, $('btn-chest'));
     } else {
       this.showToast(this.i18n.t('toastAdFail'));
     }
+  }
+
+  grantChestCoins(amount, cooldownSec, srcEl) {
+    this.spawnFlyingCoins(srcEl, 8);
+    this.state.coins += amount;
+    this.state.totalEarned += amount;
+    this.chestCooldownSec = cooldownSec;
+    this.audio.playCoins();
+    this.pulseCoins();
+    this.animateCoinsTo(this.state.coins);
+    this.checkRankOvertakeToast();
+    this.save(true);
+    this.refreshAllUi();
+    this.showToast(this.i18n.t('toastChest', { amount }));
   }
 
   canClaimDailyToday() {
@@ -1058,21 +1380,46 @@ class GameApp {
       grid.appendChild(card);
     });
 
+    const curAmount = getDailyRewardAmount(activeIdx, this.state.orderIndex, this.state.upgrades.appraisal);
     const btn = $('btn-claim-daily');
     btn.disabled = !canClaim;
-    btn.textContent = this.i18n.t(canClaim ? 'dailyClaim' : 'dailyClaimed');
+    btn.textContent = canClaim
+      ? `${this.i18n.t('dailyClaim')} · +${curAmount}`
+      : this.i18n.t('dailyClaimed');
+
+    const btnX2 = $('btn-claim-daily-x2');
+    if (btnX2) {
+      const showX2 = canClaim && this.platform.isRewardedSupported() && !this.platform.cgNoFillDetected;
+      btnX2.classList.toggle('hidden', !showX2);
+      $('daily-claim-x2-label').textContent = this.i18n.t('dailyClaimX2', { amount: curAmount * 2 });
+    }
   }
 
-  claimDailyReward() {
+  async claimDailyRewardX2() {
+    if (!this.canClaimDailyToday()) return;
+    this.audio.unlock();
+    this.audio.playClick();
+    const { rewarded, noFill } = await this.platform.showRewarded('daily_x2');
+    if (rewarded) {
+      this.claimDailyReward(2);
+    } else if (noFill) {
+      this.claimDailyReward(1);
+    } else {
+      this.showToast(this.i18n.t('toastAdFail'));
+    }
+  }
+
+  claimDailyReward(mult = 1) {
     if (!this.canClaimDailyToday()) return;
     const idx = this.state.daily.streak % DAILY_REWARDS.length;
-    const amount = getDailyRewardAmount(
+    const baseAmount = getDailyRewardAmount(
       idx,
       this.state.orderIndex,
       this.state.upgrades.appraisal
     );
+    const amount = Math.round(baseAmount * mult);
 
-    this.spawnFlyingCoins($('btn-claim-daily'), 9);
+    this.spawnFlyingCoins($(mult > 1 ? 'btn-claim-daily-x2' : 'btn-claim-daily'), 9);
     this.state.coins += amount;
     this.state.totalEarned += amount;
     this.state.daily.lastClaimDate = getTodayStr();
@@ -1081,6 +1428,7 @@ class GameApp {
     this.audio.playCoins();
     this.pulseCoins();
     this.animateCoinsTo(this.state.coins);
+    this.checkRankOvertakeToast();
     this.save(true);
     this.refreshAllUi();
     this.renderDailyModal();
@@ -1100,10 +1448,19 @@ class GameApp {
     this.openModal('modal-collection');
   }
 
+  openLeaderboardModalDirect() {
+    this.audio.unlock();
+    this.audio.playClick();
+    this.setDrawerOpen(false);
+    $('tab-leaderboard').classList.remove('hidden');
+    this.renderCollectionGrid();
+    this.switchCollectionTab('leaderboard');
+    this.openModal('modal-collection');
+  }
+
   switchCollectionTab(tab) {
     if (tab === 'leaderboard') {
       const lbType = this.platform.getLeaderboardType();
-      if (lbType === 'not_available' || lbType === 'native') return;
       if (lbType === 'native_popup') {
         this.platform.showNativeLeaderboardPopup();
         return;
@@ -1120,14 +1477,61 @@ class GameApp {
     }
   }
 
+  renderMuseumWingsSummary() {
+    const wrap = $('museum-wings-summary');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const unlockedSet = new Set(Object.keys(this.state.collectionRecords));
+
+    for (const wing of MUSEUM_WINGS) {
+      const done = wing.itemIds.filter((id) => unlockedSet.has(id)).length;
+      const total = wing.itemIds.length;
+      const claimed = Boolean(this.state.claimedWings[wing.id]);
+      const ready = done >= total && !claimed;
+
+      const card = document.createElement('div');
+      card.className = `wing-summary-card${ready ? ' ready' : claimed ? ' claimed' : ''}`;
+
+      const nm = document.createElement('div');
+      nm.className = 'wing-summary-name';
+      nm.textContent = this.i18n.t(wing.id);
+
+      const meta = document.createElement('div');
+      meta.className = 'wing-summary-meta';
+      const countSpan = document.createElement('span');
+      countSpan.textContent = `${done}/${total}`;
+      meta.appendChild(countSpan);
+
+      if (ready) {
+        const cBtn = document.createElement('button');
+        cBtn.type = 'button';
+        cBtn.className = 'btn-wing-claim-inline';
+        cBtn.textContent = this.i18n.t('wingClaimBtn', { reward: formatCoinAmount(wing.reward) });
+        cBtn.addEventListener('click', () => {
+          this.awardWingReward(wing, cBtn);
+          this.renderMuseumWingsSummary();
+        });
+        meta.appendChild(cBtn);
+      } else {
+        const rSpan = document.createElement('strong');
+        rSpan.textContent = claimed ? '✓' : `+${formatCoinAmount(wing.reward)}`;
+        meta.appendChild(rSpan);
+      }
+
+      card.append(nm, meta);
+      wrap.appendChild(card);
+    }
+  }
+
   async renderCollectionGrid() {
+    this.renderMuseumWingsSummary();
     const grid = $('collection-grid');
     grid.innerHTML = '';
     const renderToken = (this.collectionRenderToken || 0) + 1;
     this.collectionRenderToken = renderToken;
     const thumbJobs = [];
 
-    for (const item of ITEMS_CATALOG) {
+    ITEMS_CATALOG.forEach((item, idx) => {
       const best = this.state.collectionRecords[item.id] || 0;
       const unlocked = best > 0;
       const card = document.createElement('div');
@@ -1136,15 +1540,17 @@ class GameApp {
       const img = document.createElement('img');
       img.className = 'collection-thumb';
       img.decoding = 'async';
-      img.alt = unlocked ? this.i18n.t(`item_${item.id}`) : '---';
+      img.alt = this.i18n.t(`item_${item.id}`);
 
       const name = document.createElement('div');
       name.className = 'collection-item-name';
-      name.textContent = unlocked ? this.i18n.t(`item_${item.id}`) : this.i18n.t('lockedName');
+      name.textContent = this.i18n.t(`item_${item.id}`);
 
       const meta = document.createElement('div');
       meta.className = 'collection-item-meta';
-      meta.textContent = unlocked ? `${best}` : this.i18n.t(`rarity_${item.rarity}`);
+      meta.textContent = unlocked
+        ? `${formatCoinAmount(best)}`
+        : this.i18n.t('unlockAtTicket', { num: idx + 1 });
 
       card.append(img, name, meta);
       if (unlocked) {
@@ -1160,7 +1566,7 @@ class GameApp {
       }
       grid.appendChild(card);
       thumbJobs.push({ item, img });
-    }
+    });
 
     for (let i = 0; i < thumbJobs.length; i += 4) {
       if (this.collectionRenderToken !== renderToken) return;
@@ -1200,24 +1606,132 @@ class GameApp {
     this.refreshAllUi();
   }
 
+  getReputationScore() {
+    return Math.max(0, Math.floor((Number(this.state.totalEarned) || 0) + (Number(this.state.completedCount) || 0) * 100));
+  }
+
+  computeCurrentRank() {
+    const myScore = this.getReputationScore();
+    const myName = this.platform.getPlayerDisplayName();
+    const combined = [
+      ...GUILD_RIVALS.map((r) => ({ name: r.name, score: r.score, isMe: false })),
+      { name: myName, score: myScore, isMe: true }
+    ].sort((a, b) => (b.score !== a.score ? b.score - a.score : (a.isMe ? -1 : 1)));
+
+    let myRank = 1;
+    combined.forEach((row, i) => {
+      row.rank = i + 1;
+      if (row.isMe) myRank = row.rank;
+    });
+    return { rank: myRank, myScore, rows: combined };
+  }
+
+  getCurrentLeagueInfo() {
+    const score = this.getReputationScore();
+    let curIdx = 0;
+    for (let i = 0; i < GUILD_LEAGUES.length; i++) {
+      if (score >= GUILD_LEAGUES[i].minScore) curIdx = i;
+    }
+    const cur = GUILD_LEAGUES[curIdx];
+    const next = GUILD_LEAGUES[curIdx + 1] || null;
+    return { cur, curIdx, next, score };
+  }
+
+  getPendingLeaguePromotion() {
+    const score = this.getReputationScore();
+    for (const lg of GUILD_LEAGUES) {
+      if (lg.reward > 0 && score >= lg.minScore && !this.state.claimedLeagues[lg.id]) {
+        return lg;
+      }
+    }
+    return null;
+  }
+
+  claimPendingLeagueReward() {
+    const lg = this.getPendingLeaguePromotion();
+    if (!lg) return;
+    this.audio.unlock();
+    this.state.claimedLeagues[lg.id] = true;
+    this.state.coins += lg.reward;
+    this.state.totalEarned += lg.reward;
+    this.spawnFlyingCoins($('btn-claim-league'), 9);
+    this.audio.playCoins();
+    this.pulseCoins();
+    this.animateCoinsTo(this.state.coins);
+    this.checkRankOvertakeToast();
+    this.save(true);
+    this.refreshAllUi();
+    this.renderLeaderboardPane();
+    this.showToast(`${this.i18n.t(`league_${lg.id}`)} · +${formatCoinAmount(lg.reward)}`);
+  }
+
+  checkRankOvertakeToast() {
+    const { rank, rows } = this.computeCurrentRank();
+    if (this.lastKnownRank !== null && rank < this.lastKnownRank) {
+      const overtaken = rows.find((r) => !r.isMe && r.rank === rank + 1);
+      if (overtaken) {
+        this.showToast(this.i18n.t('overtakeToast', { name: overtaken.name, rank }));
+      }
+    }
+    this.lastKnownRank = rank;
+  }
+
+  hasReadyMuseumWing() {
+    const unlockedSet = new Set(Object.keys(this.state.collectionRecords));
+    return MUSEUM_WINGS.some(
+      (w) => !this.state.claimedWings[w.id] && w.itemIds.every((id) => unlockedSet.has(id))
+    );
+  }
+
   async renderLeaderboardPane() {
-    $('stat-total-earned-val').textContent = String(this.state.totalEarned);
+    const { cur, next, score } = this.getCurrentLeagueInfo();
+    const pendingPromo = this.getPendingLeaguePromotion();
+
+    if ($('league-kicker')) $('league-kicker').textContent = this.i18n.t('leagueKicker');
+    if ($('league-title')) $('league-title').textContent = this.i18n.t(`league_${cur.id}`);
+
+    const claimBtn = $('btn-claim-league');
+    if (claimBtn) {
+      if (pendingPromo) {
+        claimBtn.textContent = this.i18n.t('leagueClaimBtn', { reward: formatCoinAmount(pendingPromo.reward) });
+        claimBtn.classList.remove('hidden');
+      } else {
+        claimBtn.classList.add('hidden');
+      }
+    }
+
+    if (next) {
+      const span = Math.max(1, next.minScore - cur.minScore);
+      const pct = Math.min(100, Math.max(4, Math.round(((score - cur.minScore) / span) * 100)));
+      $('league-progress-fill').style.width = `${pct}%`;
+      $('league-progress-sub').textContent = this.i18n.t('leagueNextSub', {
+        next: this.i18n.t(`league_${next.id}`),
+        left: Math.max(0, next.minScore - score),
+        reward: formatCoinAmount(next.reward)
+      });
+    } else {
+      $('league-progress-fill').style.width = '100%';
+      $('league-progress-sub').textContent = this.i18n.t('leagueMaxSub');
+    }
+
+    $('stat-total-earned-val').textContent = formatCoinAmount(score);
     $('stat-orders-done-val').textContent = String(this.state.completedCount);
     const shouldShowAuth = this.platform.isAuthSupported() && !this.platform.isPlayerAuthorized();
     $('lb-auth-box').classList.toggle('hidden', !shouldShowAuth);
 
     const list = $('leaderboard-list');
-    list.innerHTML = `<div class="lb-row">${this.i18n.t('lbEmpty')}</div>`;
+    const localLadder = this.computeCurrentRank().rows;
+    const remoteEntries = await this.platform.getLeaderboardEntries(score);
 
-    const entries = await this.platform.getLeaderboardEntries(this.state.totalEarned);
+    const displayRows = remoteEntries.length >= 3 ? remoteEntries : localLadder;
     list.innerHTML = '';
-    for (const entry of entries) {
+    for (const entry of displayRows) {
       const row = document.createElement('div');
       row.className = `lb-row ${entry.isMe ? 'me' : ''}`;
       const left = document.createElement('span');
       left.textContent = `#${entry.rank} ${entry.name}`;
       const right = document.createElement('strong');
-      right.textContent = String(entry.score);
+      right.textContent = formatCoinAmount(entry.score);
       row.append(left, right);
       list.appendChild(row);
     }
@@ -1228,7 +1742,7 @@ class GameApp {
     this.audio.playClick();
     const ok = await this.platform.promptAuth();
     if (ok) {
-      await this.platform.submitLeaderboardScore(this.state.totalEarned);
+      await this.platform.submitLeaderboardScore(this.getReputationScore());
       this.showToast(this.i18n.t('toastAuthOk'));
       await this.renderLeaderboardPane();
     }
@@ -1263,9 +1777,18 @@ class GameApp {
 
     const unlockedCount = Object.keys(this.state.collectionRecords).length;
     $('collection-count-badge').textContent = `${unlockedCount}/${ITEMS_CATALOG.length}`;
+    $('collection-dot')?.classList.toggle('hidden', !this.hasReadyMuseumWing());
     $('daily-dot').classList.toggle('hidden', !this.canClaimDailyToday());
-    const nativeLangNames = { en: 'English', ru: 'Русский', tr: 'Türkçe' };
-    $('lang-label').textContent = nativeLangNames[this.i18n.lang] || 'English';
+
+    const { rank } = this.computeCurrentRank();
+    if ($('rank-hud-value')) $('rank-hud-value').textContent = `#${rank}`;
+    $('rank-promo-dot')?.classList.toggle('hidden', !this.getPendingLeaguePromotion());
+
+    const isCompactHud = typeof window !== 'undefined' && window.innerWidth <= 580;
+    const nativeLangNames = isCompactHud
+      ? { en: 'EN', ru: 'RU', tr: 'TR' }
+      : { en: 'English', ru: 'Русский', tr: 'Türkçe' };
+    $('lang-label').textContent = nativeLangNames[this.i18n.lang] || (isCompactHud ? 'EN' : 'English');
   }
 
   refreshOrderHeader() {
@@ -1330,8 +1853,12 @@ class GameApp {
     $('market-modal-title').textContent = this.i18n.t('marketTitle');
     $('market-subtitle').textContent = this.i18n.t('marketSub');
     const bonusAmt = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
-    $('market-ad-label').textContent = this.i18n.t('marketAdBtn', { amount: bonusAmt });
-    $('btn-market-ad').classList.toggle('hidden', !this.platform.isRewardedSupported());
+    const isNoFill = Boolean(this.platform.cgNoFillDetected);
+    const shownAmt = isNoFill ? Math.max(40, Math.round((bonusAmt * 0.55) / 5) * 5) : bonusAmt;
+    $('market-ad-label').textContent = this.i18n.t('marketAdBtn', { amount: shownAmt });
+    $('market-ad-tag')?.classList.toggle('hidden', isNoFill);
+    $('btn-market-ad').disabled = this.chestCooldownSec > 0;
+    $('btn-market-ad').classList.toggle('hidden', !this.platform.isRewardedSupported() || (isNoFill && this.chestCooldownSec > 0));
 
     const list = $('market-lots-list');
     list.innerHTML = '';
@@ -1438,21 +1965,24 @@ class GameApp {
   }
 
   async earnMarketAd() {
+    if (this.chestCooldownSec > 0) return;
     this.audio.unlock();
     this.audio.playClick();
-    const { rewarded } = await this.platform.showRewarded('market_advance');
-    if (rewarded) {
-      const amount = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
-      this.spawnFlyingCoins($('btn-market-ad'), 8);
-      this.state.coins += amount;
-      this.state.totalEarned += amount;
-      this.audio.playCoins();
-      this.pulseCoins();
-      this.animateCoinsTo(this.state.coins);
-      this.save(true);
-      this.refreshAllUi();
+    const fullAmount = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
+    if (this.platform.cgNoFillDetected) {
+      const amount = Math.max(40, Math.round((fullAmount * 0.55) / 5) * 5);
+      this.grantChestCoins(amount, 120, $('btn-market-ad'));
       await this.renderMarketModal();
-      this.showToast(this.i18n.t('toastChest', { amount }));
+      return;
+    }
+    const { rewarded, noFill } = await this.platform.showRewarded('market_advance');
+    if (rewarded) {
+      this.grantChestCoins(fullAmount, 90, $('btn-market-ad'));
+      await this.renderMarketModal();
+    } else if (noFill) {
+      const amount = Math.max(40, Math.round((fullAmount * 0.55) / 5) * 5);
+      this.grantChestCoins(amount, 120, $('btn-market-ad'));
+      await this.renderMarketModal();
     } else {
       this.showToast(this.i18n.t('toastAdFail'));
     }
@@ -1681,17 +2211,20 @@ class GameApp {
 
   refreshBoostersUi() {
     const rewSupported = this.platform.isRewardedSupported();
+    const isNoFill = Boolean(this.platform.cgNoFillDetected);
+    const freeGift = this.isFreeTurboGiftAvailable();
     const suppliesSection = $('rack-supplies-section');
     const turboBtn = $('btn-turbo');
+    const turboBadge = $('turbo-badge');
     const turboBeltBtn = $('btn-turbo-belt');
     const turboBeltAd = $('turbo-belt-ad');
     const turboBanner = $('turbo-banner');
     const chestBtn = $('btn-chest');
 
     if (suppliesSection) {
-      suppliesSection.classList.toggle('hidden', !rewSupported);
+      suppliesSection.classList.toggle('hidden', !rewSupported && !freeGift);
     }
-    turboBeltBtn.classList.toggle('hidden', !rewSupported && this.turboRemainingSec <= 0);
+    turboBeltBtn.classList.toggle('hidden', !rewSupported && !freeGift && this.turboRemainingSec <= 0);
 
     if (this.turboRemainingSec > 0) {
       turboBtn.disabled = true;
@@ -1699,26 +2232,72 @@ class GameApp {
       if (turboBeltAd) turboBeltAd.classList.add('hidden');
       $('turbo-title').textContent = this.i18n.t('turboActiveBtn', { sec: this.turboRemainingSec });
       $('turbo-belt-label').textContent = this.i18n.t('turboActiveBtn', { sec: this.turboRemainingSec });
+      if (turboBadge) {
+        turboBadge.classList.remove('gift-free');
+        turboBadge.textContent = `${this.turboRemainingSec}s`;
+      }
       turboBanner.classList.remove('hidden');
       $('turbo-banner-text').textContent = this.i18n.t('turboBanner', { sec: this.turboRemainingSec });
+    } else if (this.turboCooldownSec > 0 && !freeGift) {
+      turboBtn.disabled = true;
+      turboBeltBtn.disabled = true;
+      if (turboBeltAd) turboBeltAd.classList.add('hidden');
+      $('turbo-title').textContent = this.i18n.t('turboTitle');
+      $('turbo-sub').textContent = this.i18n.t('turboNoFillSub');
+      $('turbo-belt-label').textContent = this.i18n.t('chestCooldown', { sec: this.turboCooldownSec });
+      if (turboBadge) {
+        turboBadge.classList.remove('gift-free');
+        turboBadge.textContent = this.i18n.t('chestCooldown', { sec: this.turboCooldownSec });
+      }
+      turboBanner.classList.add('hidden');
+    } else if (freeGift) {
+      turboBtn.disabled = false;
+      turboBeltBtn.disabled = false;
+      $('turbo-title').textContent = this.i18n.t('turboFreeTitle');
+      $('turbo-sub').textContent = this.i18n.t('turboSub');
+      $('turbo-belt-label').textContent = this.i18n.t('turboBtn');
+      if (turboBeltAd) {
+        turboBeltAd.textContent = this.i18n.t('freeGiftBadge');
+        turboBeltAd.classList.remove('hidden');
+      }
+      if (turboBadge) {
+        turboBadge.classList.add('gift-free');
+        turboBadge.textContent = this.i18n.t('freeGiftBadge');
+      }
+      turboBanner.classList.add('hidden');
     } else {
       turboBtn.disabled = false;
       turboBeltBtn.disabled = false;
-      if (turboBeltAd) turboBeltAd.classList.remove('hidden');
       $('turbo-title').textContent = this.i18n.t('turboTitle');
+      $('turbo-sub').textContent = this.i18n.t(isNoFill ? 'turboNoFillSub' : 'turboSub');
       $('turbo-belt-label').textContent = this.i18n.t('turboBtn');
+      if (turboBeltAd) {
+        turboBeltAd.textContent = isNoFill ? '⚡' : '🎬';
+        turboBeltAd.classList.remove('hidden');
+      }
+      if (turboBadge) {
+        turboBadge.classList.remove('gift-free');
+        turboBadge.innerHTML = isNoFill
+          ? `${iconSvg('bolt', 'ui-svg svg-xs')}`
+          : `${iconSvg('playAd', 'ui-svg svg-xs')}<span>🎬</span>`;
+      }
       turboBanner.classList.add('hidden');
     }
 
-    const reward = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
-    $('chest-sub').textContent = this.i18n.t('chestSub', { amount: formatCoinAmount(reward) });
+    const fullReward = getScavengerChestReward(this.state.upgrades.appraisal, this.state.orderIndex);
+    const displayReward = isNoFill ? Math.max(40, Math.round((fullReward * 0.55) / 5) * 5) : fullReward;
+    $('chest-sub').textContent = this.i18n.t(isNoFill ? 'chestNoFillSub' : 'chestSub', {
+      amount: formatCoinAmount(displayReward)
+    });
     const badge = $('chest-badge');
     if (this.chestCooldownSec > 0) {
       chestBtn.disabled = true;
       badge.textContent = this.i18n.t('chestCooldown', { sec: this.chestCooldownSec });
     } else {
       chestBtn.disabled = false;
-      badge.innerHTML = `${iconSvg('playAd', 'ui-svg svg-xs')}<span>AD</span>`;
+      badge.innerHTML = isNoFill
+        ? `${iconSvg('boxSupply', 'ui-svg svg-xs')}`
+        : `${iconSvg('playAd', 'ui-svg svg-xs')}<span>🎬</span>`;
     }
   }
 
@@ -1752,8 +2331,8 @@ class GameApp {
     $('hallmark-label').textContent = this.i18n.t('hallmarkLabel');
     $('grade-label').textContent = this.i18n.t('gradeLabel');
     $('reward-label').textContent = this.i18n.t('rewardLabel');
-    $('sell-x2-label').textContent = this.i18n.t('sellX2');
-    $('sell-normal-label').textContent = this.i18n.t('sellNormal');
+    $('sell-x2-label').textContent = this.i18n.t('sellVipX2');
+    $('sell-normal-label').textContent = this.i18n.t('sellHammerBtn');
     $('test-item-label').textContent = this.i18n.t('testItemBtn');
     $('market-modal-title').textContent = this.i18n.t('marketTitle');
     $('market-subtitle').textContent = this.i18n.t('marketSub');
@@ -1769,6 +2348,23 @@ class GameApp {
 
     $('daily-modal-title').textContent = this.i18n.t('dailyTitle');
     $('daily-subtitle').textContent = this.i18n.t('dailySubtitle');
+
+    if ($('guide-modal-title')) {
+      $('guide-modal-title').textContent = this.i18n.t('guideTitle');
+      $('guide-intro-text').textContent = this.i18n.t('guideIntro');
+      $('guide-step1-title').textContent = this.i18n.t('guideStep1Title');
+      $('guide-step1-desc').textContent = this.i18n.t('guideStep1Desc');
+      $('guide-step2-title').textContent = this.i18n.t('guideStep2Title');
+      $('guide-step2-desc').textContent = this.i18n.t('guideStep2Desc');
+      $('guide-step3-title').textContent = this.i18n.t('guideStep3Title');
+      $('guide-step3-desc').textContent = this.i18n.t('guideStep3Desc');
+      $('btn-guide-ok').textContent = this.i18n.t('guideOkBtn');
+    }
+
+    if (this.currentPendingSale) {
+      this.renderAuctionBox();
+      this.renderCompleteWingStrip(this.currentPendingSale.order?.item?.id);
+    }
   }
 
   pulseCoins() {

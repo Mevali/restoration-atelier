@@ -61,7 +61,7 @@ export const ITEMS_CATALOG = [
     id: 'royal_dagger',
     rarity: 'rare',
     baseReward: 320,
-    dirtHardness: 1.06,
+    dirtHardness: 0.88,
     parts: ['lvl3_dagger'],
     basePartId: 'lvl3_dagger',
     coverPartId: null,
@@ -88,7 +88,7 @@ export const ITEMS_CATALOG = [
     id: 'retro_console',
     rarity: 'epic',
     baseReward: 480,
-    dirtHardness: 1.16,
+    dirtHardness: 0.95,
     parts: ['lvl4_console_base', 'lvl4_console_shell'],
     basePartId: 'lvl4_console_base',
     coverPartId: 'lvl4_console_shell',
@@ -148,7 +148,7 @@ export const ITEMS_CATALOG = [
     id: 'imperial_medallion',
     rarity: 'epic',
     baseReward: 680,
-    dirtHardness: 1.25,
+    dirtHardness: 1.04,
     parts: ['lvl5_medallion_core', 'lvl5_medallion_lid'],
     basePartId: 'lvl5_medallion_core',
     coverPartId: 'lvl5_medallion_lid',
@@ -208,7 +208,7 @@ export const ITEMS_CATALOG = [
     id: 'vintage_lighter',
     rarity: 'rare',
     baseReward: 880,
-    dirtHardness: 1.34,
+    dirtHardness: 1.12,
     parts: ['lvl6_lighter'],
     basePartId: 'lvl6_lighter',
     coverPartId: null,
@@ -1244,6 +1244,15 @@ export function getOrderSpec(orderIndex, lotOverride = null) {
   const lotMult = lotOverride?.payoutMult || 1;
   const rewardBase = isReplay ? item.baseReward : Math.max(item.baseReward, baseItem.baseReward);
 
+  // Regular client tickets also carry hidden maker hallmarks (Order #2 guaranteed discovery, ~40% afterwards)
+  const defaultClientMark = !isReplay && (orderIndex === 1 || (orderIndex >= 3 && (orderIndex * 7 + 3) % 5 < 2));
+  const hasMakerMark = lotOverride && typeof lotOverride.hasMakerMark === 'boolean'
+    ? Boolean(lotOverride.hasMakerMark || defaultClientMark)
+    : defaultClientMark;
+  const markMult = lotOverride?.markMult && lotOverride.markMult > 1
+    ? lotOverride.markMult
+    : (hasMakerMark ? 1.65 : 1);
+
   return {
     orderNumber: orderIndex + 1,
     vipCycle,
@@ -1251,12 +1260,104 @@ export function getOrderSpec(orderIndex, lotOverride = null) {
     isReplay,
     lotKind: lotOverride?.kind || 'client',
     lotCost: lotOverride?.cost || 0,
-    hasMakerMark: Boolean(lotOverride?.hasMakerMark),
-    markMult: lotOverride?.markMult || 1,
+    hasMakerMark,
+    markMult,
     markRevealed: Boolean(lotOverride?.markRevealed),
     item,
     basePayout: Math.round(rewardBase * vipRewardMult * lotMult),
     dirtHardness: item.dirtHardness * vipHardnessMult
+  };
+}
+
+export const MUSEUM_WINGS = [
+  {
+    id: 'wing_1',
+    reward: 450,
+    itemIds: ['pocket_watch', 'vintage_camera', 'royal_dagger', 'retro_console', 'imperial_medallion']
+  },
+  {
+    id: 'wing_2',
+    reward: 1200,
+    itemIds: ['vintage_lighter', 'supercar_wheel', 'music_box', 'diving_helmet', 'imperial_crown']
+  },
+  {
+    id: 'wing_3',
+    reward: 2800,
+    itemIds: ['brass_sextant', 'rotary_phone', 'samurai_tsuba', 'gramophone', 'moto_carburetor']
+  },
+  {
+    id: 'wing_4',
+    reward: 6200,
+    itemIds: ['hoplite_helmet', 'arcade_stick', 'railroad_lantern', 'brass_microscope', 'scarab_amulet']
+  },
+  {
+    id: 'wing_5',
+    reward: 12500,
+    itemIds: ['espresso_lever', 'knights_gauntlet', 'tube_radio', 'jade_censer', 'vintage_saxophone']
+  },
+  {
+    id: 'wing_6',
+    reward: 24000,
+    itemIds: ['ship_binnacle', 'steam_governor', 'faberge_egg', 'celestial_armillary', 'tutankhamun_mask']
+  }
+];
+
+export const GUILD_LEAGUES = [
+  { id: 'apprentice', minScore: 0, reward: 0 },
+  { id: 'brass', minScore: 780, reward: 320 },
+  { id: 'silver', minScore: 2800, reward: 850 },
+  { id: 'gold', minScore: 7600, reward: 2200 },
+  { id: 'grand', minScore: 18500, reward: 5500 }
+];
+
+export const GUILD_RIVALS = [
+  { id: 'r1', name: 'Henri Moreau', score: 190 },
+  { id: 'r2', name: 'Clara Lindqvist', score: 340 },
+  { id: 'r3', name: 'Matteo Conti', score: 560 },
+  { id: 'r4', name: 'Артём Соколов', score: 820 },
+  { id: 'r5', name: 'Emre Yılmaz', score: 1180 },
+  { id: 'r6', name: 'Sophie Laurent', score: 1650 },
+  { id: 'r7', name: 'Lukas Weber', score: 2240 },
+  { id: 'r8', name: 'Елена Морозова', score: 2950 },
+  { id: 'r9', name: 'Arthur Pendelton', score: 3900 },
+  { id: 'r10', name: 'Kenji Takahashi', score: 5100 },
+  { id: 'r11', name: 'Zeynep Kaya', score: 6600 },
+  { id: 'r12', name: 'Виктор Орлов', score: 8400 },
+  { id: 'r13', name: 'Beatrice Vance', score: 10800 },
+  { id: 'r14', name: 'Julian Sterling', score: 13600 },
+  { id: 'r15', name: 'Маргарита Левина', score: 16900 },
+  { id: 'r16', name: 'Lorenzo Bellini', score: 20800 },
+  { id: 'r17', name: 'Eleanor Ashworth', score: 26400 },
+  { id: 'r18', name: 'Jean-Luc Breguet', score: 34000 }
+];
+
+export function createAuctionSession(basePayout, orderNumber = 1) {
+  const seed = (orderNumber * 37 + basePayout) % 97;
+  const jitter = (seed % 7) * 0.01;
+  const roundTo5 = (v) => Math.max(10, Math.round(v / 5) * 5);
+  return {
+    round: 0,
+    maxRounds: 2,
+    bidders: [
+      {
+        id: 'curator',
+        mults: [1.0, 1.12 + jitter, 1.20 + jitter],
+        bid: basePayout
+      },
+      {
+        id: 'gallerist',
+        mults: [1.06, 1.22 + jitter, 1.34 + jitter],
+        bid: roundTo5(basePayout * 1.06)
+      },
+      {
+        id: 'collector',
+        mults: [1.12, 1.28 + jitter, 1.46 + jitter],
+        bid: roundTo5(basePayout * 1.12)
+      }
+    ].map((b, i) => ({
+      ...b,
+      leading: i === 2
+    }))
   };
 }
 

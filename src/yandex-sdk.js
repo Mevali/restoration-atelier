@@ -1,7 +1,16 @@
 const SAVE_KEY = 'restoration_atelier_save';
 const LEADERBOARD_ID = 'restoration_tycoon';
 const YA_LEADERBOARD_ID = 'restorationtycoon';
-export const GAME_VERSION = '1.0.2';
+export const GAME_VERSION = '1.1.0';
+
+function cleanPlayerName(raw, fallback) {
+  const s = String(raw || '').trim();
+  if (!s) return fallback;
+  if (/^(guest|гость|misafir|player|user)[\s_#-]*[a-z0-9]{3,}$/i.test(s)) {
+    return fallback;
+  }
+  return s;
+}
 
 function percentileSorted(sortedAsc, p) {
   if (!sortedAsc.length) return 0;
@@ -21,7 +30,10 @@ export class PlatformBridge {
     this.yaGameplayRunning = false;
     this.cgsdk = null;
     this.cgGameplayRunning = false;
+    this.cgNoFillDetected = false;
     this.vkb = null;
+    this.vkPlayerName = '';
+    this.interstitialOrderCounter = 0;
     this.readySent = false;
     this.gameplayActive = false;
     this.isPaused = false;
@@ -97,6 +109,17 @@ export class PlatformBridge {
         await cg.init();
         this.cgsdk = cg;
         try {
+          const mute = this.cgsdk.game?.settings?.muteAudio;
+          if (typeof mute === 'boolean') {
+            this.audio.setPlatformAudioEnabled(!mute);
+          }
+          this.cgsdk.game?.addSettingsChangeListener?.((settings) => {
+            if (typeof settings?.muteAudio === 'boolean') {
+              this.audio.setPlatformAudioEnabled(!settings.muteAudio);
+            }
+          });
+        } catch {}
+        try {
           this.cgsdk.game?.loadingStart?.();
         } catch {}
         return this.cgsdk;
@@ -111,6 +134,12 @@ export class PlatformBridge {
       try {
         await vkb.send('VKWebAppInit');
       } catch {}
+      vkb.send('VKWebAppGetUserInfo')
+        .then((u) => {
+          const full = [u?.first_name, u?.last_name].filter(Boolean).join(' ').trim();
+          if (full) this.vkPlayerName = full;
+        })
+        .catch(() => {});
       if (typeof vkb.subscribe === 'function') {
         vkb.subscribe((evt) => {
           const t = evt?.detail?.type;
@@ -444,9 +473,24 @@ export class PlatformBridge {
   }
 
   getLeaderboardType() {
-    if (this.ysdk) return 'in_game';
-    if (!this.bridge) return 'not_available';
-    return this.bridge.leaderboards?.type || 'not_available';
+    if (this.ysdk || this.cgsdk || this.vkb) return 'in_game';
+    if (!this.bridge) return 'in_game';
+    const t = this.bridge.leaderboards?.type;
+    return t === 'native_popup' ? 'native_popup' : 'in_game';
+  }
+
+  getPlayerDisplayName() {
+    const fallback = this.i18n.t('lbYou');
+    if (this.ysdk) {
+      return cleanPlayerName(this.yaPlayer?.getName?.(), fallback);
+    }
+    if (this.vkb && this.vkPlayerName) {
+      return cleanPlayerName(this.vkPlayerName, fallback);
+    }
+    if (this.bridge?.player?.name) {
+      return cleanPlayerName(this.bridge.player.name, fallback);
+    }
+    return fallback;
   }
 
   isAuthSupported() {
@@ -676,7 +720,7 @@ export class PlatformBridge {
             const myUid = this.yaPlayer?.getUniqueID?.();
             return res.entries.slice(0, 10).map((e, idx) => ({
               rank: e.rank || idx + 1,
-              name: e.player?.publicName || this.i18n.t('lbYou'),
+              name: cleanPlayerName(e.player?.publicName, this.i18n.t('lbYou')),
               score: Number(e.score) || 0,
               isMe: Boolean(myUid && e.player?.uniqueID === myUid)
             }));
@@ -688,7 +732,7 @@ export class PlatformBridge {
       return [
         {
           rank: 1,
-          name: this.yaPlayer?.getName?.() || this.i18n.t('lbYou'),
+          name: this.getPlayerDisplayName(),
           score: Math.max(0, Math.floor(userScore)),
           isMe: true
         }
@@ -705,7 +749,7 @@ export class PlatformBridge {
         const myId = this.bridge.player?.id;
         return entries.slice(0, 10).map((e, idx) => ({
           rank: e.rank || idx + 1,
-          name: e.name || this.i18n.t('lbYou'),
+          name: cleanPlayerName(e.name, this.i18n.t('lbYou')),
           score: Number(e.score) || 0,
           isMe: Boolean(myId && e.id && String(e.id) === String(myId))
         }));
@@ -716,7 +760,7 @@ export class PlatformBridge {
     return [
       {
         rank: 1,
-        name: this.bridge.player?.name || this.i18n.t('lbYou'),
+        name: this.getPlayerDisplayName(),
         score: Math.max(0, Math.floor(userScore)),
         isMe: true
       }
@@ -736,6 +780,10 @@ export class PlatformBridge {
   }
 
   showInterstitialIfReady() {
+    this.interstitialOrderCounter += 1;
+    if (this.interstitialOrderCounter < 3 || this.interstitialOrderCounter % 2 !== 1) {
+      return Promise.resolve(false);
+    }
     if (this.ysdk) {
       if (!this.ysdk.adv?.showFullscreenAdv || this.interstitialResolver) {
         return Promise.resolve(false);
@@ -776,7 +824,7 @@ export class PlatformBridge {
     }
 
     if (this.cgsdk?.ad?.requestAd) {
-      if (this.interstitialResolver) return Promise.resolve(false);
+      if (this.interstitialResolver || this.cgNoFillDetected) return Promise.resolve(false);
       return new Promise((resolve) => {
         let settled = false;
         let started = false;
@@ -802,12 +850,16 @@ export class PlatformBridge {
           this.cgsdk.ad.requestAd('midgame', {
             adStarted: () => {
               started = true;
+              this.cgNoFillDetected = false;
               this.perfSkipNextFrame = true;
               this.audio.setAdOpen(true);
               this.syncCgGameplayState();
             },
             adFinished: () => finish(true),
-            adError: () => finish(false)
+            adError: () => {
+              if (!started) this.cgNoFillDetected = true;
+              finish(false);
+            }
           });
         } catch {
           finish(false);
@@ -913,9 +965,10 @@ export class PlatformBridge {
     }
 
     if (this.cgsdk?.ad?.requestAd) {
-      if (this.rewardedContext) return Promise.resolve({ rewarded: false, placement });
+      if (this.rewardedContext) return Promise.resolve({ rewarded: false, placement, noFill: false });
       return new Promise((resolve) => {
         let settled = false;
+        let wasStarted = false;
         const finish = (res) => {
           if (settled) return;
           settled = true;
@@ -928,20 +981,26 @@ export class PlatformBridge {
           }
           resolve(res);
         };
-        const safetyTimer = setTimeout(() => finish({ rewarded: false, placement }), 90000);
+        const safetyTimer = setTimeout(() => finish({ rewarded: false, placement, noFill: false }), 90000);
         this.rewardedContext = { placement, rewarded: false, resolve: finish };
         try {
           this.cgsdk.ad.requestAd('rewarded', {
             adStarted: () => {
+              wasStarted = true;
+              this.cgNoFillDetected = false;
               this.perfSkipNextFrame = true;
               this.audio.setAdOpen(true);
               this.syncCgGameplayState();
             },
-            adFinished: () => finish({ rewarded: true, placement }),
-            adError: () => finish({ rewarded: false, placement })
+            adFinished: () => finish({ rewarded: true, placement, noFill: false }),
+            adError: () => {
+              const noFill = !wasStarted;
+              if (noFill) this.cgNoFillDetected = true;
+              finish({ rewarded: false, placement, noFill });
+            }
           });
         } catch {
-          finish({ rewarded: false, placement });
+          finish({ rewarded: false, placement, noFill: true });
         }
       });
     }

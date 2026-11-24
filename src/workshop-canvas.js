@@ -1,5 +1,19 @@
 import { applyPartPaintTint, renderCompositeSnapshot } from './items-renderer.js';
 
+function traceRoundRect(ctx, x, y, w, h, r) {
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, w, h, r);
+    return;
+  }
+  const rad = Math.max(0, Math.min(r, w * 0.5, h * 0.5));
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
 export class WorkshopCanvas {
   constructor(canvas, {
     audio,
@@ -10,6 +24,7 @@ export class WorkshopCanvas {
     onHintReady,
     onAssemblyPhase,
     onNeedToolPick,
+    onMasterGrip,
     onReadyForTest,
     onMakerMarkReveal,
     onToolStateChange,
@@ -25,6 +40,7 @@ export class WorkshopCanvas {
     this.onHintReady = onHintReady;
     this.onAssemblyPhase = onAssemblyPhase;
     this.onNeedToolPick = onNeedToolPick;
+    this.onMasterGrip = onMasterGrip;
     this.onReadyForTest = onReadyForTest;
     this.onMakerMarkReveal = onMakerMarkReveal;
     this.onToolStateChange = onToolStateChange;
@@ -117,6 +133,7 @@ export class WorkshopCanvas {
     this.lastPaintTintColor = '';
     this.equippedToolKey = null;
     this.toolLocked = false;
+    this.masterGripBoost = false;
     this.activePaintSwatch = null;
     this.awaitingTest = false;
     this.testingAnim = { active: false, timer: 0, duration: 1.55, itemId: '' };
@@ -196,10 +213,14 @@ export class WorkshopCanvas {
 
       const isDragStep = step.type === 'assemble' && this.assemblyState.phase === 'drag';
       if (!isDragStep && this.toolLocked) {
-        this.pointerDown = false;
-        this.audio.playWrongTool();
-        this.onNeedToolPick?.(this.getStepToolKey(step));
-        return;
+        const autoKey = this.getStepToolKey(step);
+        this.equippedToolKey = autoKey;
+        this.toolLocked = false;
+        this.masterGripBoost = false;
+        this.toolPos = { x: pos.x + 64, y: pos.y + 64 };
+        this.audio.playToolSwap();
+        this.syncCursorMode();
+        this.onToolStateChange?.();
       }
 
       this.pointerDown = true;
@@ -392,6 +413,7 @@ export class WorkshopCanvas {
     this.firstTouchFired = false;
     this.equippedToolKey = null;
     this.toolLocked = false;
+    this.masterGripBoost = false;
     this.activePaintSwatch = null;
     this.transition.active = false;
     this.transition.timer = 0;
@@ -559,6 +581,7 @@ export class WorkshopCanvas {
     }
 
     const reqKey = this.getStepToolKey(step);
+    this.masterGripBoost = false;
     if ((this.orderSpec?.orderNumber || 1) <= 2 || !reqKey) {
       this.equippedToolKey = reqKey;
       this.toolLocked = false;
@@ -582,12 +605,17 @@ export class WorkshopCanvas {
       this.onNeedToolPick?.(requiredKey, toolKey);
       return false;
     }
+    const wasLocked = this.toolLocked;
     this.equippedToolKey = toolKey;
     this.toolLocked = false;
+    if (wasLocked && this.stepProgress < 15) {
+      this.masterGripBoost = true;
+      this.onMasterGrip?.();
+    }
     const target = this.hoverPos || { x: 468, y: 472 };
     this.toolPos = { x: target.x + 80, y: target.y + 80 };
     this.audio.playToolSwap();
-    this.spawnBurst(target.x, target.y, 10, '#e2c48d');
+    this.spawnBurst(target.x, target.y, 12, '#fbbf24');
     this.syncCursorMode();
     this.onToolStateChange?.();
     return true;
@@ -765,9 +793,10 @@ export class WorkshopCanvas {
     const count = Math.max(1, Math.ceil(dist / stepSize));
 
     const hardness = this.orderSpec?.dirtHardness || 1;
+    const gripMult = this.masterGripBoost ? 1.18 : 1;
     const effectivePower = this.turboActive
-      ? 0.90
-      : Math.min(0.86, Math.max(0.28, this.brushStrength / Math.pow(hardness, 0.36)));
+      ? 0.92
+      : Math.min(0.88, Math.max(0.30, (this.brushStrength * gripMult) / Math.pow(hardness, 0.34)));
 
     if (step.type === 'excavate') {
       const ectx = this.excavateMaskCanvas.getContext('2d');
@@ -1525,9 +1554,15 @@ export class WorkshopCanvas {
       const rawDtMs = Math.max(0, now - this.lastFrameAt);
       const dt = Math.min(0.05, Math.max(0.004, rawDtMs / 1000));
       this.lastFrameAt = now;
-      this.onFrameSample?.(rawDtMs, now);
-      this.update(now, dt);
-      this.render(now);
+      try {
+        this.onFrameSample?.(rawDtMs, now);
+        this.update(now, dt);
+        this.render(now);
+      } catch {
+        try {
+          this.ctx?.restore?.();
+        } catch {}
+      }
     };
     this.rafId = requestAnimationFrame(tick);
   }
@@ -1816,7 +1851,8 @@ export class WorkshopCanvas {
   }
 
   updateScrewHold(list, dt, removing) {
-    const powerScale = 0.92 + this.brushStrength * 1.05;
+    const gripMult = this.masterGripBoost ? 1.18 : 1;
+    const powerScale = (0.92 + this.brushStrength * 1.05) * gripMult;
     const rate = (removing ? 1.75 : 2.15) * powerScale * (this.turboActive ? 1.55 : 1);
     let activeAny = false;
     for (const s of list) {
@@ -1853,7 +1889,8 @@ export class WorkshopCanvas {
   }
 
   updatePrecisionHold(now, dt, step) {
-    const powerScale = 0.92 + this.brushStrength * 1.05;
+    const gripMult = this.masterGripBoost ? 1.18 : 1;
+    const powerScale = (0.92 + this.brushStrength * 1.05) * gripMult;
     const introSpeed = (this.orderSpec?.orderNumber || 3) <= 2 ? 1.32 : 1;
     const rate = 1.52 * powerScale * introSpeed * (this.turboActive ? 1.55 : 1);
     const kind = step?.kind || 'oil';
@@ -2121,14 +2158,15 @@ export class WorkshopCanvas {
 
     for (let i = 0; i < this.particles.length; i++) {
       const pt = this.particles[i];
+      const safeR = Math.max(0.5, Number(pt.radius) || 1);
       ctx.save();
       ctx.globalAlpha = Math.max(0, pt.life);
       if (pt.kind === 'star') {
         ctx.fillStyle = pt.color;
-        this.drawStar(ctx, pt.x, pt.y, pt.radius);
+        this.drawStar(ctx, pt.x, pt.y, safeR);
       } else if (pt.kind === 'streak' || pt.kind === 'spark') {
         ctx.strokeStyle = pt.color;
-        ctx.lineWidth = pt.radius;
+        ctx.lineWidth = safeR;
         ctx.lineCap = 'round';
         const tailScale = pt.kind === 'spark' ? 2.4 : 2.8;
         ctx.beginPath();
@@ -2139,12 +2177,12 @@ export class WorkshopCanvas {
         ctx.strokeStyle = pt.color;
         ctx.lineWidth = 1.6;
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, pt.radius, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, safeR, 0, Math.PI * 2);
         ctx.stroke();
       } else if (pt.kind === 'clod') {
         ctx.translate(pt.x, pt.y);
         ctx.rotate(pt.rot || 0);
-        const r = pt.radius;
+        const r = safeR;
         ctx.fillStyle = pt.color;
         ctx.beginPath();
         ctx.moveTo(-r, -r * 0.4);
@@ -2160,16 +2198,16 @@ export class WorkshopCanvas {
       } else if (pt.kind === 'oil_drop') {
         ctx.fillStyle = pt.color;
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, pt.radius, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, safeR, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.beginPath();
-        ctx.arc(pt.x - pt.radius * 0.3, pt.y - pt.radius * 0.3, Math.max(0.8, pt.radius * 0.28), 0, Math.PI * 2);
+        ctx.arc(pt.x - safeR * 0.3, pt.y - safeR * 0.3, Math.max(0.8, safeR * 0.28), 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = pt.color;
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, pt.radius, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, safeR, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
@@ -2206,14 +2244,14 @@ export class WorkshopCanvas {
         ctx.restore();
       }
 
-      // Animated onboarding gesture cue on early orders when idle
+      // Animated gesture cue on early orders or when idle ~4.8s on any order
       const ordNum = this.orderSpec?.orderNumber || 3;
       const shouldShowGuide = Boolean(
         step &&
         !this.completed &&
         !this.pointerDown &&
-        ordNum <= 2 &&
-        (this.stepProgress < 10 || now - this.lastScrubTime > 2400)
+        ((ordNum <= 2 && (this.stepProgress < 10 || now - this.lastScrubTime > 2400)) ||
+          now - this.lastScrubTime > 4800)
       );
       if (shouldShowGuide) {
         this.renderOnboardingGuide(ctx, now, step);
@@ -2666,7 +2704,7 @@ export class WorkshopCanvas {
     rimGrad.addColorStop(1, '#2b1b0e');
     ctx.fillStyle = rimGrad;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 16);
+    traceRoundRect(ctx, x, y, w, h, 16);
     ctx.fill();
     ctx.restore();
 
@@ -2674,7 +2712,7 @@ export class WorkshopCanvas {
     ctx.strokeStyle = 'rgba(218, 174, 102, 0.42)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 16);
+    traceRoundRect(ctx, x, y, w, h, 16);
     ctx.stroke();
 
     // Recessed burlap/sand tray bed
@@ -2687,7 +2725,7 @@ export class WorkshopCanvas {
     bedGrad.addColorStop(1, '#19120c');
     ctx.fillStyle = bedGrad;
     ctx.beginPath();
-    ctx.roundRect(bedX, bedY, bedW, bedH, 10);
+    traceRoundRect(ctx, bedX, bedY, bedW, bedH, 10);
     ctx.fill();
 
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)';
@@ -2828,7 +2866,7 @@ export class WorkshopCanvas {
       sg.addColorStop(1, 'rgba(34, 197, 94, 0.25)');
       ctx.fillStyle = sg;
       ctx.beginPath();
-      ctx.roundRect(bx, by, bw, bh, 10);
+      traceRoundRect(ctx, bx, by, bw, bh, 10);
       ctx.fill();
 
       const scanY = by + 8 + ((now * 0.14) % Math.max(24, bh - 22));
@@ -2953,7 +2991,7 @@ export class WorkshopCanvas {
     ctx.strokeStyle = 'rgba(200, 157, 84, 0.55)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.roundRect(18, 18, 92, 92, 10);
+    traceRoundRect(ctx, 18, 18, 92, 92, 10);
     ctx.fill();
     ctx.stroke();
 

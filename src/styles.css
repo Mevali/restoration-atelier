@@ -2378,3 +2378,401 @@ button:disabled {
   justify-content: center;
   gap: 6px;
 }
+
+/* v1.1 Retention, Live 3-Bidder Auction, Museum Wings & 5 Guild Leagues */
+.rank-hud-pill {
+  position: relative;
+  cursor: pointer;
+  border-color: rgba(251, 191, 36, 0.52);
+  color: #fde68a;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.rank-hud-pill:hover {
+  border-color: #fde68a;
+}
+
+.rank-hud-pill:active {
+  transform: translateY(2px);
+}
+
+.help-btn {
+  font-weight: 900;
+  font-size: 14px;
+  color: var(--brass-bright);
+}
+
+.ad-pill.gift-free {
+  background: linear-gradient(180deg, #43b479 0%, #247349 100%);
+  border-color: #86efac;
+  color: #ffffff;
+}
+
+.auction-box {
+  background: rgba(34, 26, 18, 0.08);
+  border: 1px solid #b59867;
+  border-radius: 7px;
+  padding: 8px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.auction-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.auction-title {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #5b3e14;
+}
+
+.btn-raise-bid {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #d97706 0%, #9a3412 100%);
+  border: 1px solid #fde68a;
+  color: #fffbeb;
+  font-size: 11px;
+  font-weight: 800;
+  box-shadow: 0 2px 0 #571d09;
+  transition: transform 0.08s ease;
+}
+
+.btn-raise-bid:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-raise-bid:disabled {
+  background: #7c684a;
+  border-color: #a89373;
+  box-shadow: none;
+  opacity: 0.72;
+}
+
+.auction-bidders {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.bidder-card {
+  padding: 6px 5px;
+  border-radius: 6px;
+  background: #fdf8ee;
+  border: 1px solid #ccb68f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.bidder-card.leading {
+  background: linear-gradient(180deg, #fef3c7 0%, #fde68a 100%);
+  border: 1.5px solid #b45309;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(180, 83, 9, 0.22);
+}
+
+.bidder-name {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #5c4832;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.bidder-amount {
+  font-size: 13px;
+  font-weight: 900;
+  color: #1f6b43;
+}
+
+.complete-wing-strip {
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: rgba(31, 107, 67, 0.09);
+  border: 1px solid rgba(31, 107, 67, 0.36);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wing-strip-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wing-strip-title {
+  font-size: 11px;
+  font-weight: 800;
+  color: #194d32;
+}
+
+.btn-wing-claim-inline {
+  padding: 4px 9px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #43b479 0%, #247349 100%);
+  border: 1px solid #86efac;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  animation: rackPulse 1.2s ease-in-out infinite;
+}
+
+.wing-strip-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(33, 24, 16, 0.16);
+  overflow: hidden;
+}
+
+.wing-strip-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2b8a57 0%, #43b479 100%);
+  transition: width 0.25s ease;
+}
+
+.btn-collect-primary {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #3da86e 0%, #216b43 100%);
+  border: 1.5px solid #164b2e;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 3px 0 #123c24;
+}
+
+.btn-collect-primary:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #123c24;
+}
+
+.daily-actions-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.btn-collect-dark {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--brass-dim);
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.museum-wings-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.wing-summary-card {
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--bg-card);
+  border: 1px solid rgba(212, 168, 92, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wing-summary-card.ready {
+  border-color: #4ade80;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.wing-summary-card.claimed {
+  border-color: rgba(242, 207, 131, 0.45);
+  opacity: 0.85;
+}
+
+.wing-summary-name {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--brass-bright);
+}
+
+.wing-summary-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.league-banner {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #36281c 0%, #221912 100%);
+  border: 1px solid var(--brass-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.league-banner-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.league-kicker {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.league-title {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  color: #fde68a;
+}
+
+.btn-claim-league {
+  padding: 6px 11px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #43b479 0%, #247349 100%);
+  border: 1px solid #86efac;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  animation: rackPulse 1.2s ease-in-out infinite;
+}
+
+.league-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.league-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d97706 0%, #fde68a 100%);
+  transition: width 0.25s ease;
+}
+
+.league-progress-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.guide-card {
+  max-width: 460px;
+}
+
+.guide-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.guide-step-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid rgba(212, 168, 92, 0.28);
+}
+
+.guide-step-img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.guide-step-row strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--brass-bright);
+  margin-bottom: 2px;
+}
+
+.guide-step-row p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+@media (max-width: 580px) {
+  .ticket-pill {
+    display: none !important;
+  }
+  .hud-bar {
+    gap: 5px;
+  }
+  .hud-left {
+    gap: 5px;
+    flex: 0 1 auto;
+  }
+  .hud-actions {
+    gap: 4px;
+  }
+  .stat-pill {
+    padding: 5px 8px;
+    font-size: 12px;
+    gap: 4px;
+  }
+  .icon-btn {
+    min-width: 32px;
+    height: 33px;
+    padding: 0 7px;
+    gap: 4px;
+  }
+  .lang-btn #lang-label {
+    font-size: 10.5px;
+  }
+}
+
+@media (max-width: 380px) {
+  #collection-count-badge {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .paper-act-card {
+    padding: 13px;
+    gap: 9px;
+  }
+  .ba-compare-stage {
+    max-width: 190px;
+  }
+}

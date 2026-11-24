@@ -26,6 +26,11 @@
           <span id="order-number" class="stat-num">#1</span>
           <span id="order-mode-tag" class="order-mode-tag hidden"></span>
         </div>
+        <button id="btn-rank-hud" class="stat-pill rank-hud-pill" type="button" aria-label="Rank">
+          <span id="rank-icon-slot" class="svg-slot svg-sm"></span>
+          <span id="rank-hud-value" class="stat-num">#19</span>
+          <span id="rank-promo-dot" class="notify-dot hidden"></span>
+        </button>
       </div>
 
       <div class="hud-actions">
@@ -36,7 +41,9 @@
         <button id="btn-collection" class="icon-btn" type="button" aria-label="Archive">
           <span id="icon-collection-slot" class="svg-slot"></span>
           <span id="collection-count-badge" class="mini-badge">0/30</span>
+          <span id="collection-dot" class="notify-dot hidden"></span>
         </button>
+        <button id="btn-help" class="icon-btn help-btn" type="button" aria-label="Guide">?</button>
         <button id="btn-sound" class="icon-btn" type="button" aria-label="Sound">
           <span id="sound-icon-slot" class="svg-slot"></span>
         </button>
@@ -138,7 +145,7 @@
           <button id="btn-turbo-belt" class="belt-turbo-btn" type="button">
             <span id="icon-bolt-belt-slot" class="svg-slot svg-sm"></span>
             <span id="turbo-belt-label">Turbo</span>
-            <span id="turbo-belt-ad" class="ad-mini-tag">AD</span>
+            <span id="turbo-belt-ad" class="ad-mini-tag">🎬</span>
           </button>
         </div>
       </section>
@@ -164,9 +171,9 @@
                   <small id="turbo-sub">×2 ширина и давление</small>
                 </span>
               </span>
-              <span class="ad-pill">
+              <span id="turbo-badge" class="ad-pill">
                 <span class="ad-play-slot svg-slot svg-xs"></span>
-                <span>AD</span>
+                <span id="turbo-badge-text">🎬</span>
               </span>
             </button>
 
@@ -180,7 +187,7 @@
               </span>
               <span id="chest-badge" class="ad-pill">
                 <span class="ad-play-slot svg-slot svg-xs"></span>
-                <span>AD</span>
+                <span id="chest-badge-text">🎬</span>
               </span>
             </button>
           </div>
@@ -272,11 +279,34 @@
           </div>
           <div id="hallmark-row" class="ledger-row hidden">
             <span id="hallmark-label">Клеймо подлинности</span>
-            <strong id="hallmark-value" class="ledger-hallmark">Подлинник ×1.9</strong>
+            <strong id="hallmark-value" class="ledger-hallmark">Подлинник ×1.65</strong>
           </div>
           <div class="ledger-row">
-            <span id="reward-label">Выплата по квитанции</span>
+            <span id="reward-label">Ставка аукциона</span>
             <strong id="reward-value" class="ledger-coins">70</strong>
+          </div>
+        </div>
+
+        <!-- Live 3-Collector Auction Block -->
+        <div id="auction-box" class="auction-box">
+          <div class="auction-head">
+            <span id="auction-title" class="auction-title">Аукционный зал · 3 коллекционера</span>
+            <button id="btn-raise-bid" class="btn-raise-bid" type="button">
+              <span id="icon-gavel-slot" class="svg-slot svg-xs"></span>
+              <span id="raise-bid-label">Поднять ставку! (1/2)</span>
+            </button>
+          </div>
+          <div id="auction-bidders" class="auction-bidders"></div>
+        </div>
+
+        <!-- Museum Wing Progress & Instant Claim Strip -->
+        <div id="complete-wing-strip" class="complete-wing-strip">
+          <div class="wing-strip-top">
+            <span id="wing-strip-title" class="wing-strip-title">Зал музея №1: 1/5</span>
+            <button id="btn-wing-claim-inline" class="btn-wing-claim-inline hidden" type="button">+450</button>
+          </div>
+          <div class="wing-strip-bar">
+            <div id="wing-strip-fill" class="wing-strip-fill" style="width: 20%"></div>
           </div>
         </div>
 
@@ -291,17 +321,18 @@
         </div>
 
         <div class="complete-actions">
+          <button id="btn-sell-normal" class="btn-collect-primary" type="button">
+            <span id="sell-gavel-slot" class="svg-slot svg-sm"></span>
+            <span id="sell-normal-label">Продать с молотка</span>
+            <strong id="sell-normal-amount">70</strong>
+          </button>
           <button id="btn-sell-x2" class="btn-auction" type="button">
             <span class="btn-vip-top">
               <span id="sell-x2-play-slot" class="svg-slot svg-sm"></span>
-              <span id="sell-x2-label">Collector Auction ×2</span>
-              <span class="ad-mini-tag">AD</span>
+              <span id="sell-x2-label">Закрытый торг ×2</span>
+              <span id="sell-x2-tag" class="ad-mini-tag">🎬</span>
             </span>
             <span id="sell-x2-amount" class="btn-vip-sub">140</span>
-          </button>
-          <button id="btn-sell-normal" class="btn-collect" type="button">
-            <span id="sell-normal-label">Принять в кассу</span>
-            <span id="sell-normal-amount">70</span>
           </button>
         </div>
       </div>
@@ -317,17 +348,31 @@
 
         <div class="tab-bar">
           <button id="tab-museum" class="tab-btn active" type="button">Витрина экспонатов</button>
-          <button id="tab-leaderboard" class="tab-btn" type="button">Рейтинг мастеров</button>
+          <button id="tab-leaderboard" class="tab-btn" type="button">Рейтинг и Лиги</button>
         </div>
 
         <div id="pane-museum" class="modal-scroll-pane">
+          <div id="museum-wings-summary" class="museum-wings-summary"></div>
           <div id="collection-grid" class="collection-grid"></div>
         </div>
 
         <div id="pane-leaderboard" class="modal-scroll-pane hidden">
+          <div id="league-banner" class="league-banner">
+            <div class="league-banner-top">
+              <div>
+                <small id="league-kicker" class="league-kicker">Гильдия реставраторов</small>
+                <strong id="league-title" class="league-title">Подмастерье верстака</strong>
+              </div>
+              <button id="btn-claim-league" class="btn-claim-league hidden" type="button">+320</button>
+            </div>
+            <div class="league-progress-bar">
+              <div id="league-progress-fill" class="league-progress-fill" style="width: 15%"></div>
+            </div>
+            <div id="league-progress-sub" class="league-progress-sub">До следующей лиги: 780 очков</div>
+          </div>
           <div class="stats-grid">
             <div class="mini-stat-card">
-              <small id="stat-total-earned-label">Общий оборот</small>
+              <small id="stat-total-earned-label">Очки репутации</small>
               <strong id="stat-total-earned-val">0</strong>
             </div>
             <div class="mini-stat-card">
@@ -354,7 +399,16 @@
         </div>
         <p id="daily-subtitle" class="daily-subtitle">Ежедневная премия за выход в мастерскую.</p>
         <div id="daily-days-grid" class="daily-days-grid"></div>
-        <button id="btn-claim-daily" class="btn-auction" type="button">Получить премию</button>
+        <div class="daily-actions-col">
+          <button id="btn-claim-daily-x2" class="btn-auction" type="button">
+            <span class="btn-vip-top">
+              <span id="daily-x2-play-slot" class="svg-slot svg-sm"></span>
+              <span id="daily-claim-x2-label">Удвоить премию ×2</span>
+              <span class="ad-mini-tag">🎬</span>
+            </span>
+          </button>
+          <button id="btn-claim-daily" class="btn-collect-dark" type="button">Получить премию</button>
+        </div>
       </div>
     </div>
 
@@ -370,8 +424,43 @@
         <button id="btn-market-ad" class="btn-market-ad" type="button">
           <span id="market-ad-icon" class="svg-slot svg-sm"></span>
           <span id="market-ad-label">Rush Side Job +75</span>
-          <span class="ad-mini-tag">AD</span>
+          <span id="market-ad-tag" class="ad-mini-tag">🎬</span>
         </button>
+      </div>
+    </div>
+
+    <!-- Workshop Illustrated Guide Modal (?) -->
+    <div id="modal-guide" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+      <div class="modal-card guide-card">
+        <div class="modal-top-bar">
+          <h2 id="guide-modal-title">Памятка реставратора</h2>
+          <button id="btn-close-guide" class="close-x" type="button" aria-label="Close">✕</button>
+        </div>
+        <p id="guide-intro-text" class="daily-subtitle">Добро пожаловать в антикварную мастерскую! Возвращайте жизнь редким реликвиям в 3 простых шага:</p>
+        <div class="guide-steps-list">
+          <div class="guide-step-row">
+            <img src="assets/tools/tool_foam.webp" alt="" class="guide-step-img" />
+            <div>
+              <strong id="guide-step1-title">1. Снимите грязь и ржавчину</strong>
+              <p id="guide-step1-desc">Водите инструментом по предмету и зажимайте винты, чтобы разобрать и вычистить каждую деталь.</p>
+            </div>
+          </div>
+          <div class="guide-step-row">
+            <img src="assets/items/lvl1_watch_clean.webp" alt="" class="guide-step-img" />
+            <div>
+              <strong id="guide-step2-title">2. Ищите скрытые клейма мастеров</strong>
+              <p id="guide-step2-desc">Под слоем окислов прячутся подлинные клейма, которые резко повышают ценность находки!</p>
+            </div>
+          </div>
+          <div class="guide-step-row">
+            <img src="assets/items/lvl10_crown_clean.webp" alt="" class="guide-step-img" />
+            <div>
+              <strong id="guide-step3-title">3. Торгуйтесь на аукционе и собирайте Музей</strong>
+              <p id="guide-step3-desc">Поднимайте ставки 3 коллекционеров ударом молотка, открывайте 6 залов Музея и растите в 5 Лигах!</p>
+            </div>
+          </div>
+        </div>
+        <button id="btn-guide-ok" class="btn-collect-primary" type="button">За верстак!</button>
       </div>
     </div>
 
